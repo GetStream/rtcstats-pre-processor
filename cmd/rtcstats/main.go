@@ -3,12 +3,10 @@ package main
 import (
 	"flag"
 	"fmt"
-	"io"
 	"os"
 	"strings"
 
-	"rtcstats/internal/event"
-	"rtcstats/internal/processor"
+	"rtcstats"
 )
 
 func main() {
@@ -17,6 +15,8 @@ func main() {
 	output := flag.String("output", "", "Output file (default: stdout)")
 	tsMode := flag.String("ts", "absolute", "Timestamp mode: absolute|delta|both")
 	pretty := flag.Bool("pretty", false, "Pretty-print JSON output")
+	quiet := flag.Bool("q", false, "Suppress stats output")
+	quietLong := flag.Bool("quiet", false, "Suppress stats output")
 
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: rtcstats [flags] <input-file>\n\n")
@@ -28,6 +28,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "  rtcstats -o out.jsonl events.jsonl       Process file, output to file\n")
 		fmt.Fprintf(os.Stderr, "  rtcstats --ts delta events.jsonl         Use delta timestamps\n")
 		fmt.Fprintf(os.Stderr, "  rtcstats --pretty events.jsonl           Pretty-print output\n")
+		fmt.Fprintf(os.Stderr, "  rtcstats -q events.jsonl                 Suppress stats logging\n")
 	}
 
 	flag.Parse()
@@ -48,42 +49,33 @@ func main() {
 	}
 
 	// Parse timestamp mode
-	var timestampMode event.TimestampMode
+	var timestampMode rtcstats.TimestampMode
 	switch strings.ToLower(*tsMode) {
 	case "absolute", "abs":
-		timestampMode = event.TSAbsolute
+		timestampMode = rtcstats.TSAbsolute
 	case "delta", "dt":
-		timestampMode = event.TSDelta
+		timestampMode = rtcstats.TSDelta
 	case "both":
-		timestampMode = event.TSBoth
+		timestampMode = rtcstats.TSBoth
 	default:
 		fmt.Fprintf(os.Stderr, "Error: invalid timestamp mode: %s (use: absolute|delta|both)\n", *tsMode)
 		os.Exit(1)
 	}
 
-	// Read input file
-	reader, err := event.NewReaderFromFile(inputFile)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error reading input: %v\n", err)
-		os.Exit(1)
+	// Build options
+	opts := []rtcstats.Option{
+		rtcstats.WithTimestampMode(timestampMode),
+	}
+	if *pretty {
+		opts = append(opts, rtcstats.WithPrettyPrint())
+	}
+	if !*quiet && !*quietLong {
+		opts = append(opts, rtcstats.WithLogger(rtcstats.StderrLogger()))
 	}
 
-	// Set up output writer
-	var writer io.Writer = os.Stdout
-	if outPath != "" {
-		f, err := os.Create(outPath)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error creating output file: %v\n", err)
-			os.Exit(1)
-		}
-		defer f.Close()
-		writer = f
-	}
-
-	// Create and run pipeline
-	pipeline := processor.NewPipeline(reader, writer, timestampMode, *pretty)
-	if err := pipeline.Run(); err != nil {
-		fmt.Fprintf(os.Stderr, "Error processing events: %v\n", err)
+	// Process
+	if _, err := rtcstats.ProcessStats(inputFile, outPath, opts...); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
 }
