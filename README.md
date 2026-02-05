@@ -1,4 +1,4 @@
-# rtcstats
+# rtcstats-pre-processor
 
 A Go library and CLI tool that compresses WebRTC event logs into a compact format optimized for LLM token consumption.
 
