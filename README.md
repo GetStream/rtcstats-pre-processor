@@ -113,6 +113,33 @@ fmt.Printf("%d events, %.0f%% reduction\n", result.EventCount, result.Reduction*
 | `WithPrettyPrint()` | Indent JSON output |
 | `WithLogger(l)` | Receive stats log line after processing |
 
+## LLM Prompt Injection
+
+The `internal/prompts` package exports constant strings that translate compressed field names back to human-readable descriptions. Inject these into your LLM system prompts so the model can interpret abbreviated output.
+
+```go
+import "rtcstats/internal/prompts"
+
+// Full reference covering stats, events, SDP digests, and scopes
+systemPrompt := "You are a WebRTC diagnostics assistant.\n\n" + prompts.FullReference
+
+// Or pick only what you need:
+//   prompts.StatsFields      – getstats report field translations (out_v, in_a, etc.)
+//   prompts.EventFields      – connection event payload field translations
+//   prompts.SDPDigestFields   – SDP summary (sdp_sum) field translations
+//   prompts.ScopeReference   – scope string conventions (0-pub, 0-sub, sfu:*)
+```
+
+Available constants:
+
+| Constant | Covers |
+|----------|--------|
+| `prompts.StatsFields` | All getstats report types and their abbreviated fields (bs, hbs, fps, etc.) |
+| `prompts.EventFields` | Connection event payload keys (did, sid, uid, ok, dur, etc.) and state enums |
+| `prompts.SDPDigestFields` | SDP digest object fields (sdp_sum: type, codecs, sim_rids, tcc, etc.) |
+| `prompts.ScopeReference` | Scope string meanings (0-pub, 0-sub, sfu:\<region\>) |
+| `prompts.FullReference` | All of the above concatenated |
+
 ## Result
 
 `ProcessStats`, `Process`, and `ProcessBytes` all return a `*Result`:
