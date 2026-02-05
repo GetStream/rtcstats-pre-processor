@@ -256,20 +256,3 @@ func (h *OnTrackHandler) Transform(e event.RawEvent) interface{} {
 	return result
 }
 
-// GetStatsHandler handles getstats events - typically dropped or minimized
-type GetStatsHandler struct{}
-
-func (h *GetStatsHandler) Transform(e event.RawEvent) interface{} {
-	// getstats events are usually for internal metrics, keep minimal
-	var payload map[string]interface{}
-	if err := json.Unmarshal(e.Payload, &payload); err != nil {
-		return nil
-	}
-
-	// Just keep timestamp if present
-	if ts, ok := payload["timestamp"].(float64); ok {
-		return map[string]interface{}{"ts": int64(ts)}
-	}
-
-	return nil
-}
