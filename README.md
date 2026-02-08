@@ -35,6 +35,9 @@ rtcstats [flags] <input-file>
 | `--ts` | Timestamp mode: `absolute`\|`delta`\|`both` (default: `absolute`) |
 | `--pretty` | Pretty-print JSON output |
 | `-q`, `--quiet` | Suppress stats logging to stderr |
+| `--sample` | Enable adaptive sampling for getstats events |
+| `--sample-n` | Sampling interval: keep every Nth getstats (default: `5`) |
+| `--sample-ctx` | Context window: samples before/after interesting moments (default: `2`) |
 
 **Examples:**
 
@@ -53,6 +56,12 @@ rtcstats -q events.jsonl | jq .
 
 # Discard output, show stats only
 rtcstats -o /dev/null events.jsonl
+
+# Enable adaptive sampling (keep every 5th getstats + interesting moments)
+rtcstats --sample events.jsonl
+
+# Sample every 10th getstats with wider context window
+rtcstats --sample --sample-n 10 --sample-ctx 3 events.jsonl
 ```
 
 ## Package Usage
@@ -112,6 +121,9 @@ fmt.Printf("%d events, %.0f%% reduction\n", result.EventCount, result.Reduction*
 | `WithTimestampMode(mode)` | `TSAbsolute` (default), `TSDelta`, or `TSBoth` |
 | `WithPrettyPrint()` | Indent JSON output |
 | `WithLogger(l)` | Receive stats log line after processing |
+| `WithSampling()` | Enable adaptive sampling with defaults (N=5, context=2, steady-state=true) |
+| `WithSamplingInterval(n)` | Set sampling interval (keep every Nth getstats). Implies `WithSampling()` |
+| `WithSamplingContext(before, after)` | Set context window around interesting moments. Implies `WithSampling()` |
 
 ## LLM Prompt Injection
 
@@ -138,7 +150,32 @@ Available constants:
 | `prompts.EventFields` | Connection event payload keys (did, sid, uid, ok, dur, etc.) and state enums |
 | `prompts.SDPDigestFields` | SDP digest object fields (sdp_sum: type, codecs, sim_rids, tcc, etc.) |
 | `prompts.ScopeReference` | Scope string meanings (0-pub, 0-sub, sfu:\<region\>) |
+| `prompts.SamplingReference` | Adaptive sampling and `"="` steady-state marker explanation |
 | `prompts.FullReference` | All of the above concatenated |
+
+## Adaptive Sampling
+
+For long calls, `getstats` events dominate the output. Adaptive sampling reduces this with two layers:
+
+**Layer 1 — Nth-sample selection:** Keep every Nth getstats sample (default N=5), with full resolution preserved around "interesting" moments (packet loss, freeze, FPS drops, jitter/RTT spikes, quality score changes, track additions/removals). A configurable context window (default 2 samples before/after) ensures transitions are captured.
+
+**Layer 2 — Steady-state suppression:** Within kept samples, report categories that are identical to the previous emission are replaced with `"="`, further reducing redundancy.
+
+Counter deltas are accumulated correctly across skipped samples — the total change in any counter field is preserved.
+
+```go
+result, err := rtcstats.ProcessStats("input.jsonl", "output.jsonl",
+    rtcstats.WithSampling(),
+    rtcstats.WithSamplingInterval(10),
+)
+```
+
+**Typical results:**
+
+| Sample | Without Sampling | Sampling N=5 | Sampling N=10 |
+|--------|-----------------|--------------|---------------|
+| 2.3 MB call | 73.5% reduction | 87.8% reduction | 89.9% reduction |
+| 1 MB call | 80.7% reduction | 94.6% reduction | 96.4% reduction |
 
 ## Result
 
