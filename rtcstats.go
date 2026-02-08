@@ -116,6 +116,20 @@ func applyOpts(opts []Option) options {
 func ProcessStats(inputPath, outputPath string, opts ...Option) (*Result, error) {
 	cfg := applyOpts(opts)
 
+	// Log the sampling configuration
+	if cfg.logger != nil {
+		switch {
+		case cfg.sampling != nil && cfg.sampling.SteadyState:
+			cfg.logger.Printf("Processing with Adaptive Sampling + Steady State Suppression (interval=%d, context=%d/%d)",
+				cfg.sampling.Interval, cfg.sampling.ContextBefore, cfg.sampling.ContextAfter)
+		case cfg.sampling != nil:
+			cfg.logger.Printf("Processing with Adaptive Sampling (interval=%d, context=%d/%d)",
+				cfg.sampling.Interval, cfg.sampling.ContextBefore, cfg.sampling.ContextAfter)
+		default:
+			cfg.logger.Printf("Processing with no sampling")
+		}
+	}
+	
 	inputData, err := os.ReadFile(inputPath)
 	if err != nil {
 		return nil, fmt.Errorf("reading input: %w", err)
