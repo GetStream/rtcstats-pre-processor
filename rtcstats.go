@@ -9,6 +9,7 @@ import (
 	"rtcstats/internal/event"
 	"rtcstats/internal/ioutil"
 	"rtcstats/internal/processor"
+	"rtcstats/internal/sampling"
 )
 
 // TimestampMode controls how timestamps appear in output.
@@ -47,9 +48,10 @@ func StderrLogger() Logger { return stderrLogger{} }
 type Option func(*options)
 
 type options struct {
-	tsMode  TimestampMode
-	pretty  bool
-	logger  Logger
+	tsMode   TimestampMode
+	pretty   bool
+	logger   Logger
+	sampling *sampling.Config
 }
 
 // WithTimestampMode sets absolute, delta, or both.
@@ -65,6 +67,40 @@ func WithPrettyPrint() Option {
 // WithLogger sets a Logger to receive file-size stats after processing.
 func WithLogger(l Logger) Option {
 	return func(o *options) { o.logger = l }
+}
+
+// WithSampling enables adaptive sampling with default settings
+// (interval=5, context=2, steady-state=true).
+func WithSampling() Option {
+	return func(o *options) {
+		cfg := sampling.DefaultConfig()
+		o.sampling = &cfg
+	}
+}
+
+// WithSamplingInterval sets the sampling interval (keep every Nth getstats).
+// Implies WithSampling().
+func WithSamplingInterval(n int) Option {
+	return func(o *options) {
+		if o.sampling == nil {
+			cfg := sampling.DefaultConfig()
+			o.sampling = &cfg
+		}
+		o.sampling.Interval = n
+	}
+}
+
+// WithSamplingContext sets the context window (samples before/after interesting moments).
+// Implies WithSampling().
+func WithSamplingContext(before, after int) Option {
+	return func(o *options) {
+		if o.sampling == nil {
+			cfg := sampling.DefaultConfig()
+			o.sampling = &cfg
+		}
+		o.sampling.ContextBefore = before
+		o.sampling.ContextAfter = after
+	}
 }
 
 func applyOpts(opts []Option) options {
@@ -103,7 +139,7 @@ func ProcessStats(inputPath, outputPath string, opts ...Option) (*Result, error)
 	}
 
 	cw := &ioutil.CountWriter{W: dest}
-	pipeline := processor.NewPipeline(reader, cw, cfg.tsMode, cfg.pretty)
+	pipeline := processor.NewPipeline(reader, cw, cfg.tsMode, cfg.pretty, cfg.sampling)
 	if err := pipeline.Run(); err != nil {
 		return nil, fmt.Errorf("processing: %w", err)
 	}
@@ -129,7 +165,7 @@ func Process(r io.Reader, w io.Writer, opts ...Option) (*Result, error) {
 	}
 
 	cw := &ioutil.CountWriter{W: w}
-	pipeline := processor.NewPipeline(reader, cw, cfg.tsMode, cfg.pretty)
+	pipeline := processor.NewPipeline(reader, cw, cfg.tsMode, cfg.pretty, cfg.sampling)
 	if err := pipeline.Run(); err != nil {
 		return nil, fmt.Errorf("processing: %w", err)
 	}
@@ -151,7 +187,7 @@ func ProcessBytes(input []byte, opts ...Option) ([]byte, *Result, error) {
 
 	var buf bytes.Buffer
 	cw := &ioutil.CountWriter{W: &buf}
-	pipeline := processor.NewPipeline(reader, cw, cfg.tsMode, cfg.pretty)
+	pipeline := processor.NewPipeline(reader, cw, cfg.tsMode, cfg.pretty, cfg.sampling)
 	if err := pipeline.Run(); err != nil {
 		return nil, nil, fmt.Errorf("processing: %w", err)
 	}

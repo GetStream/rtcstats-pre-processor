@@ -19,10 +19,11 @@ func (f HandlerFunc) Transform(e event.RawEvent) interface{} {
 
 // Registry maps event names to handlers
 type Registry struct {
-	exact    map[string]Handler
-	prefix   map[string]Handler
-	suffix   map[string]Handler
-	fallback Handler
+	exact      map[string]Handler
+	prefix     map[string]Handler
+	suffix     map[string]Handler
+	fallback   Handler
+	gsHandler  *GetStatsHandler
 }
 
 // NewRegistry creates a new handler registry with all handlers registered
@@ -83,7 +84,8 @@ func (r *Registry) registerPeerConnectionHandlers() {
 	r.exact["setRemoteDescriptionOnFailure"] = &FailureHandler{}
 
 	r.exact["ontrack"] = &OnTrackHandler{}
-	r.exact["getstats"] = &GetStatsHandler{}
+	r.gsHandler = &GetStatsHandler{}
+	r.exact["getstats"] = r.gsHandler
 }
 
 func (r *Registry) registerSignalingHandlers() {
@@ -135,6 +137,11 @@ func (r *Registry) Get(name string) Handler {
 	}
 
 	return r.fallback
+}
+
+// GetStatsHandler returns the typed GetStatsHandler for direct access.
+func (r *Registry) GetStatsHandler() *GetStatsHandler {
+	return r.gsHandler
 }
 
 // Register adds a handler for an exact event name match

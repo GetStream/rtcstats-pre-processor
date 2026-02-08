@@ -151,10 +151,18 @@ var globalDropFields = map[string]bool{
 	"fractionLost":                 true,
 }
 
+// StatsSnapshot captures raw values from a getstats sample for later
+// recomputation of deltas against a different baseline.
+type StatsSnapshot struct {
+	Scope     string
+	RawValues map[string]map[string]float64 // stateKey → field → raw value
+}
+
 // GetStatsHandler compresses RTCStatsReport data per the spec.
 // It holds state for delta computation across samples.
 type GetStatsHandler struct {
-	prevValues map[string]map[string]float64 // key: "scope:entryID" → field→value
+	prevValues        map[string]map[string]float64 // key: "scope:entryID" → field→value
+	lastEmittedValues map[string]map[string]float64 // baseline for emission recomputation
 }
 
 func (h *GetStatsHandler) Transform(e event.RawEvent) interface{} {
@@ -253,6 +261,266 @@ func (h *GetStatsHandler) Transform(e event.RawEvent) interface{} {
 		return nil
 	}
 	return result
+}
+
+// ExtractAndTransform works like Transform but also returns a StatsSnapshot
+// containing the raw values for each entry. The snapshot can be used later
+// to recompute deltas against a different baseline (lastEmittedValues).
+func (h *GetStatsHandler) ExtractAndTransform(e event.RawEvent) (interface{}, *StatsSnapshot) {
+	if h.prevValues == nil {
+		h.prevValues = make(map[string]map[string]float64)
+	}
+
+	var payload map[string]interface{}
+	if err := json.Unmarshal(e.Payload, &payload); err != nil {
+		return nil, nil
+	}
+
+	scope := ""
+	if e.Scope != nil {
+		scope = *e.Scope
+	}
+
+	snapshot := &StatsSnapshot{
+		Scope:     scope,
+		RawValues: make(map[string]map[string]float64),
+	}
+
+	var outV []map[string]interface{}
+	var outA map[string]interface{}
+	var inA map[string]interface{}
+	var inV map[string]interface{}
+	var rttArr []map[string]interface{}
+	var cpArr []map[string]interface{}
+	var cq map[string]interface{}
+	var ms map[string]interface{}
+
+	for entryID, raw := range payload {
+		entry, ok := raw.(map[string]interface{})
+		if !ok {
+			continue
+		}
+
+		rt := classifyEntry(entryID, entry)
+		if rt == rtUnknown {
+			continue
+		}
+
+		stateKey := scope + ":" + entryID
+		fields := fieldsForType(rt)
+
+		// Capture raw values into snapshot
+		rawVals := make(map[string]float64)
+		for _, f := range fields {
+			if v, ok := entry[f.original]; ok {
+				if fv, ok := toFloat64(v); ok {
+					rawVals[f.original] = fv
+				}
+			}
+		}
+		snapshot.RawValues[stateKey] = rawVals
+
+		compressed := h.compressEntry(stateKey, entry, fields)
+		if len(compressed) == 0 {
+			continue
+		}
+
+		switch rt {
+		case rtOutboundVideo:
+			outV = append(outV, compressed)
+		case rtOutboundAudio:
+			outA = compressed
+		case rtInboundAudio:
+			inA = compressed
+		case rtInboundVideo:
+			inV = compressed
+		case rtRemoteInbound:
+			rttArr = append(rttArr, compressed)
+		case rtCandidatePairActive:
+			cpArr = append(cpArr, compressed)
+		case rtCandidatePairRelay:
+			cpArr = append(cpArr, compressed)
+		case rtConnectionQuality:
+			cq = compressed
+		case rtMediaSourceVideo:
+			ms = compressed
+		}
+	}
+
+	result := make(map[string]interface{})
+	if len(outV) > 0 {
+		result["out_v"] = outV
+	}
+	if outA != nil {
+		result["out_a"] = outA
+	}
+	if inA != nil {
+		result["in_a"] = inA
+	}
+	if inV != nil {
+		result["in_v"] = inV
+	}
+	if len(rttArr) > 0 {
+		result["rtt"] = rttArr
+	}
+	if len(cpArr) > 0 {
+		result["cp"] = cpArr
+	}
+	if cq != nil {
+		result["cq"] = cq
+	}
+	if ms != nil {
+		result["ms"] = ms
+	}
+
+	if len(result) == 0 {
+		return nil, snapshot
+	}
+	return result, snapshot
+}
+
+// RecomputeForEmission recomputes the compressed output for a snapshot using
+// lastEmittedValues as the baseline for counter deltas instead of prevValues.
+// This produces correct accumulated deltas when samples have been skipped.
+func (h *GetStatsHandler) RecomputeForEmission(snapshot *StatsSnapshot) interface{} {
+	if h.lastEmittedValues == nil {
+		h.lastEmittedValues = make(map[string]map[string]float64)
+	}
+
+	var outV []map[string]interface{}
+	var outA map[string]interface{}
+	var inA map[string]interface{}
+	var inV map[string]interface{}
+	var rttArr []map[string]interface{}
+	var cpArr []map[string]interface{}
+	var cq map[string]interface{}
+	var ms map[string]interface{}
+
+	for stateKey, rawVals := range snapshot.RawValues {
+		// Extract entryID from stateKey (scope:entryID)
+		entryID := stateKey
+		if idx := strings.LastIndex(stateKey, ":"); idx >= 0 {
+			entryID = stateKey[idx+1:]
+		}
+
+		// Reconstruct a fake entry to classify
+		fakeEntry := make(map[string]interface{})
+		for k, v := range rawVals {
+			fakeEntry[k] = v
+		}
+		rt := classifyEntry(entryID, fakeEntry)
+		if rt == rtUnknown {
+			continue
+		}
+
+		fields := fieldsForType(rt)
+		prev := h.lastEmittedValues[stateKey]
+		compressed := make(map[string]interface{})
+
+		for _, f := range fields {
+			val, ok := rawVals[f.original]
+			if !ok {
+				continue
+			}
+
+			if f.isCounter {
+				if prev != nil {
+					if prevVal, hasPrev := prev[f.original]; hasPrev {
+						delta := roundFloat(val-prevVal, 6)
+						if delta != 0 {
+							compressed[f.shortKey] = cleanNumber(delta)
+						}
+					} else {
+						rounded := roundFloat(val, 6)
+						if rounded != 0 {
+							compressed[f.shortKey] = cleanNumber(rounded)
+						}
+					}
+				} else {
+					rounded := roundFloat(val, 6)
+					if rounded != 0 {
+						compressed[f.shortKey] = cleanNumber(rounded)
+					}
+				}
+			} else {
+				rounded := roundFloat(val, 6)
+				if rounded != 0 {
+					compressed[f.shortKey] = cleanNumber(rounded)
+				}
+			}
+		}
+
+		if len(compressed) == 0 {
+			continue
+		}
+
+		switch rt {
+		case rtOutboundVideo:
+			outV = append(outV, compressed)
+		case rtOutboundAudio:
+			outA = compressed
+		case rtInboundAudio:
+			inA = compressed
+		case rtInboundVideo:
+			inV = compressed
+		case rtRemoteInbound:
+			rttArr = append(rttArr, compressed)
+		case rtCandidatePairActive:
+			cpArr = append(cpArr, compressed)
+		case rtCandidatePairRelay:
+			cpArr = append(cpArr, compressed)
+		case rtConnectionQuality:
+			cq = compressed
+		case rtMediaSourceVideo:
+			ms = compressed
+		}
+	}
+
+	result := make(map[string]interface{})
+	if len(outV) > 0 {
+		result["out_v"] = outV
+	}
+	if outA != nil {
+		result["out_a"] = outA
+	}
+	if inA != nil {
+		result["in_a"] = inA
+	}
+	if inV != nil {
+		result["in_v"] = inV
+	}
+	if len(rttArr) > 0 {
+		result["rtt"] = rttArr
+	}
+	if len(cpArr) > 0 {
+		result["cp"] = cpArr
+	}
+	if cq != nil {
+		result["cq"] = cq
+	}
+	if ms != nil {
+		result["ms"] = ms
+	}
+
+	if len(result) == 0 {
+		return nil
+	}
+	return result
+}
+
+// UpdateEmittedBaseline copies snapshot raw values into lastEmittedValues.
+// Call this after a sample has been successfully emitted.
+func (h *GetStatsHandler) UpdateEmittedBaseline(snapshot *StatsSnapshot) {
+	if h.lastEmittedValues == nil {
+		h.lastEmittedValues = make(map[string]map[string]float64)
+	}
+	for stateKey, rawVals := range snapshot.RawValues {
+		cp := make(map[string]float64, len(rawVals))
+		for k, v := range rawVals {
+			cp[k] = v
+		}
+		h.lastEmittedValues[stateKey] = cp
+	}
 }
 
 // classifyEntry determines the report type of a stats entry by field fingerprint.

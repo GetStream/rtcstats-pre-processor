@@ -17,6 +17,9 @@ func main() {
 	pretty := flag.Bool("pretty", false, "Pretty-print JSON output")
 	quiet := flag.Bool("q", false, "Suppress stats output")
 	quietLong := flag.Bool("quiet", false, "Suppress stats output")
+	sample := flag.Bool("sample", false, "Enable adaptive sampling for getstats events")
+	sampleN := flag.Int("sample-n", 5, "Sampling interval: keep every Nth getstats sample")
+	sampleCtx := flag.Int("sample-ctx", 2, "Context window: samples before/after interesting moments")
 
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: rtcstats [flags] <input-file>\n\n")
@@ -29,6 +32,8 @@ func main() {
 		fmt.Fprintf(os.Stderr, "  rtcstats --ts delta events.jsonl         Use delta timestamps\n")
 		fmt.Fprintf(os.Stderr, "  rtcstats --pretty events.jsonl           Pretty-print output\n")
 		fmt.Fprintf(os.Stderr, "  rtcstats -q events.jsonl                 Suppress stats logging\n")
+		fmt.Fprintf(os.Stderr, "  rtcstats --sample events.jsonl           Enable adaptive sampling\n")
+		fmt.Fprintf(os.Stderr, "  rtcstats --sample --sample-n 10 e.jsonl  Sample every 10th getstats\n")
 	}
 
 	flag.Parse()
@@ -71,6 +76,15 @@ func main() {
 	}
 	if !*quiet && !*quietLong {
 		opts = append(opts, rtcstats.WithLogger(rtcstats.StderrLogger()))
+	}
+	if *sample {
+		opts = append(opts, rtcstats.WithSampling())
+		if *sampleN != 5 {
+			opts = append(opts, rtcstats.WithSamplingInterval(*sampleN))
+		}
+		if *sampleCtx != 2 {
+			opts = append(opts, rtcstats.WithSamplingContext(*sampleCtx, *sampleCtx))
+		}
 	}
 
 	// Process

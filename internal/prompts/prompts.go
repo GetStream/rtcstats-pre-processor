@@ -19,5 +19,8 @@ const SDPDigestFields = `sdp_sum fields: type=offer|answer sdp_hash=sha256 bundl
 // ScopeReference explains scope string conventions.
 const ScopeReference = `Scopes: 0-pub=publisher 0-sub=subscriber sfu:<region>=SFU`
 
+// SamplingReference explains adaptive sampling markers in the output.
+const SamplingReference = `Sampling: When adaptive sampling is enabled, getstats events are thinned to every Nth sample. Full resolution is preserved around interesting moments (packet loss, freeze, FPS/jitter/RTT changes). Category value "="=unchanged since last emitted sample (steady-state suppression). Counter deltas in sampled output are accumulated over skipped samples so totals remain correct.`
+
 // FullReference combines all field references into one prompt.
-const FullReference = StatsFields + "\n" + EventFields + "\n" + SDPDigestFields + "\n" + ScopeReference
+const FullReference = StatsFields + "\n" + EventFields + "\n" + SDPDigestFields + "\n" + ScopeReference + "\n" + SamplingReference
